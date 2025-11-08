@@ -1,0 +1,678 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<title>Fartea.Io — Map & Upgrades</title>
+<style>
+  :root{
+    --bg:#071020;
+    --grid:rgba(255,255,255,0.03);
+    --player:#3aa0ff;
+    --gun:#9aa0a6;
+    --enemy:#ff6b6b;
+    --orb:#ffe27a;
+    --ui:#e6f7ff;
+  }
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--ui);-webkit-user-select:none;user-select:none;font-family:system-ui, -apple-system, Roboto, "Helvetica Neue";}
+  *{box-sizing:border-box; touch-action: manipulation; -webkit-tap-highlight-color: transparent;}
+  #wrap{position:relative;width:100vw;height:100vh;overflow:hidden;}
+  canvas{display:block;width:100%;height:100%;background:linear-gradient(180deg,#071020,#0b1220);}
+  #hud{position:absolute;left:10px;top:8px;z-index:60;display:flex;gap:8px;align-items:center}
+  .pill{background:rgba(0,0,0,0.35);padding:8px 10px;border-radius:10px;font-weight:700;font-size:14px}
+  #controls{position:absolute;right:10px;top:8px;z-index:60;display:flex;gap:8px}
+  button{background:rgba(0,0,0,0.4);color:var(--ui);border:1px solid rgba(255,255,255,0.06);padding:8px 10px;border-radius:10px;font-weight:700}
+  #overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:80;pointer-events:none}
+  #menu{width:92%;max-width:640px;background:linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.02));padding:18px;border-radius:12px;text-align:center;pointer-events:auto;box-shadow:0 10px 30px rgba(0,0,0,0.6)}
+  h1{margin:0;font-size:20px}
+  .muted{color:rgba(255,255,255,0.7);font-size:13px;margin-top:8px}
+  .big{font-weight:800;color:var(--player);font-size:18px;margin:8px 0}
+  .choice-row{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;justify-content:center}
+  .choice{background:rgba(255,255,255,0.03);border-radius:10px;padding:12px;width:30%;min-width:160px;cursor:pointer;border:1px solid rgba(255,255,255,0.04)}
+  .choice h3{margin:0 0 6px 0;font-size:15px}
+  .choice p{margin:0;font-size:13px;color:rgba(255,255,255,0.75)}
+  .joy-outline{position:absolute;left:12px;bottom:12px;width:120px;height:120px;border-radius:999px;background:rgba(255,255,255,0.02);display:none;z-index:70}
+  .joy-stick{position:absolute;left:32px;bottom:32px;width:80px;height:80px;border-radius:999px;background:rgba(255,255,255,0.03);display:none;z-index:71}
+  @media (min-width:420px){ .choice{width:28%} .joy-outline{width:140px;height:140px} .joy-stick{width:90px;height:90px} }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game"></canvas>
+
+  <div id="hud">
+    <div class="pill">XP: <span id="xp">0</span></div>
+    <div class="pill">Level: <span id="lvl">1</span></div>
+    <div class="pill">HP: <span id="hp">100</span></div>
+    <div class="pill">High: <span id="high">0</span></div>
+  </div>
+
+  <div id="controls">
+    <button id="pauseBtn">Pause</button>
+    <button id="restartBtn">Restart</button>
+  </div>
+
+  <div class="joy-outline" id="joyOutline"></div>
+  <div class="joy-stick" id="joyStick"></div>
+
+  <div id="overlay">
+    <div id="menu">
+      <h1>Fartea.Io — Prototype</h1>
+      <div class="big">Map camera, upgrade choices, branching weapons</div>
+      <p class="muted">Left: joystick to move (touch left). Right: hold to aim & shoot (touch right). Level up pauses the game and gives 3 upgrades to choose from.</p>
+      <div style="height:12px"></div>
+      <button id="startBtn">Tap to Start</button>
+      <div class="muted" style="margin-top:10px">Tip: open in Safari and Add to Home Screen for quick access.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* Fartea.Io — single-file prototype
+   Major features:
+   - large world, camera follows player
+   - spread-out spawns across world, spawn far from player
+   - slower, gentler enemies
+   - multiple weapons + branching upgrades, level-up pause & choice
+   - joystick & right-side aim
+*/
+(() => {
+  // Canvas & scaling
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  function fitCanvas(){
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    canvas.style.width = window.innerWidth + 'px';
+    canvas.style.height = window.innerHeight + 'px';
+    canvas.width = Math.floor(window.innerWidth * dpr);
+    canvas.height = Math.floor(window.innerHeight * dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+  window.addEventListener('resize', fitCanvas);
+  fitCanvas();
+
+  // World extents (big map)
+  const WORLD_W = 3000;
+  const WORLD_H = 3000;
+
+  // HUD refs
+  const xpEl = document.getElementById('xp');
+  const lvlEl = document.getElementById('lvl');
+  const hpEl = document.getElementById('hp');
+  const highEl = document.getElementById('high');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const restartBtn = document.getElementById('restartBtn');
+  const overlay = document.getElementById('overlay');
+  const startBtn = document.getElementById('startBtn');
+  const joyOutline = document.getElementById('joyOutline');
+  const joyStick = document.getElementById('joyStick');
+
+  // Game state
+  let running = false, paused = false, showingUpgrade = false;
+  let last = performance.now();
+  let runtime = 0;
+  let high = parseFloat(localStorage.getItem('fartea_high') || '0');
+  highEl.textContent = Math.floor(high);
+
+  // Camera
+  let cam = { x: 0, y: 0 }; // top-left world coord of view (world -> screen: sx = wx - cam.x)
+  function worldToScreen(wx, wy){ return { x: wx - cam.x, y: wy - cam.y }; }
+  function screenToWorld(sx, sy){ return { x: sx + cam.x, y: sy + cam.y }; }
+
+  // Player in world coords
+  const player = {
+    x: WORLD_W/2, y: WORLD_H/2, r: 20,
+    angle: 0,
+    hpMax: 120, hp: 120,
+    speed: 200, fireRate: 0.16, fireTimer: 0, damage: 12,
+    xp: 0, level: 1, totalXp: 0
+  };
+
+  // Entities (world coords)
+  const bullets = []; // {x,y,vx,vy,life,owner,damage}
+  const enemies = []; // {x,y,r,hp,spd,fireRate,fireTimer,xpValue}
+  const orbs = []; // {x,y,r,xp,life,age}
+
+  // Spawning config — more spread-out and safer
+  let spawnRate = 1.4; // seconds between spawns initially (we'll cap max concurrently)
+  let spawnTimer = spawnRate;
+  const MAX_ENEMIES = 14; // cap to avoid overrun
+  const MIN_SPAWN_DIST = 420; // min distance from player for spawn
+
+  // Weapon system (branching upgrades)
+  // We'll define a small tree and apply upgrades by altering player's weapon properties and adding special behaviors.
+  const weaponState = {
+    // base single-shot
+    type: 'basic', // 'basic','spread','twin','pierce','rapid'
+    upgrades: {},   // records chosen upgrades (by key)
+    // per-type modifiers
+    damageMult: 1,
+    fireRateMult: 1,
+    projSpeedMult: 1,
+    spreadCount: 1, // number of bullets per shot
+    piercing: false
+  };
+
+  // Upgrade pool & branching logic (simple)
+  const ALL_UPGRADES = [
+    { id:'dmg_plus', title:'+Damage', desc:'Increase damage by 20%', apply:gs=> gs.damageMult *= 1.20 },
+    { id:'firerate_plus', title:'+Fire Rate', desc:'Fire 12% faster', apply:gs=> gs.fireRateMult *= 0.88 },
+    { id:'proj_speed', title:'Projectile Speed', desc:'Projectiles fly faster', apply:gs=> gs.projSpeedMult *= 1.25 },
+    { id:'spread_plus', title:'Spread Shot', desc:'Adds +1 projectile per shot', apply:gs=> gs.spreadCount = Math.min(7, gs.spreadCount + 1) },
+    { id:'pierce', title:'Piercing', desc:'Bullets pierce enemies', apply:gs=> gs.piercing = true },
+    { id:'twin_unlock', title:'Twin Cannon', desc:'Unlock twin shot weapon branch', apply:gs=> gs.type = 'twin' },
+    { id:'rapid_unlock', title:'Rapid Fire', desc:'Unlock rapid-fire branch', apply:gs=> gs.type = 'rapid' },
+    { id:'spread_branch', title:'Shotgun Branch', desc:'Unlocks shotgun-style shots', apply:gs=> gs.type = 'spread' },
+    { id:'dmg_big', title:'Big Damage', desc:'+40% damage (rare)', apply:gs=> gs.damageMult *= 1.4 },
+  ];
+
+  function getUpgradeChoices(level){
+    // make choices reflect level: early mostly stat upgrades, occasionally unlocks
+    const choices = [];
+    const pool = [...ALL_UPGRADES];
+    // bias unlocks after certain levels
+    if (level < 3){
+      // mostly stat & small spread
+      const candidates = pool.filter(u => ['dmg_plus','firerate_plus','proj_speed','spread_plus'].includes(u.id));
+      while(choices.length<3) choices.push(candidates.splice(Math.floor(Math.random()*candidates.length),1)[0]);
+    } else if (level < 6){
+      // mix of stats and unlocks
+      const candidates = pool.filter(u => u.id !== 'dmg_big');
+      while(choices.length<3){
+        const pick = candidates.splice(Math.floor(Math.random()*candidates.length),1)[0];
+        if (!choices.includes(pick)) choices.push(pick);
+      }
+    } else {
+      // higher levels include rare big damage
+      const candidates = pool;
+      while(choices.length<3){
+        const pick = candidates.splice(Math.floor(Math.random()*candidates.length),1)[0];
+        if (!choices.includes(pick)) choices.push(pick);
+      }
+    }
+    return choices;
+  }
+
+  // joystick & input
+  const activeTouches = {};
+  let joystickBase = null, joystickId = null;
+  let joystickVec = {x:0,y:0};
+  const joystickRadius = 56;
+  function showJoystick(x,y){
+    joyOutline.style.display = 'block';
+    joyStick.style.display = 'block';
+    joyOutline.style.left = (x - joyOutline.offsetWidth/2) + 'px';
+    joyOutline.style.bottom = (window.innerHeight - y - joyOutline.offsetHeight/2) + 'px';
+    updateJoystickVisual(0,0);
+  }
+  function hideJoystick(){
+    joyOutline.style.display = 'none';
+    joyStick.style.display = 'none';
+    joystickBase = null; joystickId = null; joystickVec = {x:0,y:0};
+  }
+  function updateJoystickVisual(dx,dy){
+    const max = (joyOutline.offsetWidth||120)/2 - 18;
+    const ddx = Math.max(-max, Math.min(max, dx));
+    const ddy = Math.max(-max, Math.min(max, dy));
+    joyStick.style.left = (joyOutline.offsetLeft + (joyOutline.offsetWidth/2) - joyStick.offsetWidth/2 + ddx) + 'px';
+    joyStick.style.bottom = (window.innerHeight - (joyOutline.offsetTop + joyOutline.offsetHeight/2) - joyStick.offsetHeight/2 - ddy) + 'px';
+  }
+
+  function onPointerDown(e){
+    const id = e.pointerId || 'mouse';
+    activeTouches[id] = {x:e.clientX, y:e.clientY};
+    // left half joystick
+    if (e.clientX < window.innerWidth * 0.45){
+      joystickBase = {x:e.clientX, y:e.clientY};
+      joystickId = id;
+      showJoystick(e.clientX, e.clientY);
+    } else {
+      // right side: immediate aim & fire
+      const w = screenToWorld(e.clientX, e.clientY);
+      player.angle = Math.atan2(w.y - player.y, w.x - player.x);
+      player.fireTimer = 0;
+    }
+  }
+  function onPointerMove(e){
+    const id = e.pointerId || 'mouse';
+    if (!activeTouches[id]) return;
+    activeTouches[id].x = e.clientX; activeTouches[id].y = e.clientY;
+    if (id === joystickId && joystickBase){
+      const dx = e.clientX - joystickBase.x, dy = e.clientY - joystickBase.y;
+      const d = Math.hypot(dx,dy) || 1;
+      const nx = dx / d, ny = dy / d;
+      const mag = Math.min(1, d / joystickRadius);
+      joystickVec.x = nx * mag; joystickVec.y = ny * mag;
+      updateJoystickVisual(dx,dy);
+    } else {
+      // right side aim
+      if (e.clientX >= window.innerWidth * 0.45){
+        const w = screenToWorld(e.clientX, e.clientY);
+        player.angle = Math.atan2(w.y - player.y, w.x - player.x);
+      }
+    }
+  }
+  function onPointerUp(e){
+    const id = e.pointerId || 'mouse';
+    delete activeTouches[id];
+    if (id === joystickId) hideJoystick();
+  }
+
+  canvas.addEventListener('pointerdown', onPointerDown);
+  canvas.addEventListener('pointermove', onPointerMove);
+  window.addEventListener('pointerup', onPointerUp);
+  // touch fallbacks
+  canvas.addEventListener('touchstart', ev=>{ ev.preventDefault(); const t=ev.changedTouches[0]; onPointerDown({pointerId:t.identifier, clientX:t.clientX, clientY:t.clientY}); }, {passive:false});
+  canvas.addEventListener('touchmove', ev=>{ ev.preventDefault(); const t=ev.changedTouches[0]; onPointerMove({pointerId:t.identifier, clientX:t.clientX, clientY:t.clientY}); }, {passive:false});
+  canvas.addEventListener('touchend', ev=>{ const t=ev.changedTouches[0]; onPointerUp({pointerId:t.identifier}); });
+
+  // bullet spawn (account for weaponState)
+  function spawnBullet(x,y,angle,owner,baseSpeed,baseDamage){
+    // handle spread
+    const spread = weaponState.spreadCount || 1;
+    const bulletsToSpawn = Math.min(8, spread);
+    // center the spread around angle
+    const spreadArc = 0.28 * (bulletsToSpawn - 1); // widen when more bullets
+    for (let i=0;i<bulletsToSpawn;i++){
+      const t = bulletsToSpawn === 1 ? 0 : (i/(bulletsToSpawn-1) - 0.5) * spreadArc;
+      const a = angle + t;
+      const s = baseSpeed * (weaponState.projSpeedMult || 1);
+      const dmg = Math.max(1, Math.round(baseDamage * (weaponState.damageMult || 1)));
+      bullets.push({ x, y, vx:Math.cos(a)*s, vy:Math.sin(a)*s, life:2.4, owner, damage:dmg, pierce: !!weaponState.piercing });
+      if (bullets.length > 220) bullets.shift(); // cap bullets
+    }
+  }
+
+  // spawn enemy far from player in world
+  function spawnEnemyFar(){
+    if (enemies.length >= MAX_ENEMIES) return;
+    // try up to N times to find a far location
+    for (let attempt=0; attempt<12; attempt++){
+      const x = Math.random()*WORLD_W;
+      const y = Math.random()*WORLD_H;
+      const dx = x - player.x, dy = y - player.y;
+      if (Math.hypot(dx,dy) >= MIN_SPAWN_DIST){
+        const r = 14 + Math.random()*18;
+        const hp = Math.floor(40 + runtime*0.5 + Math.random()*24);
+        const spd = Math.max(34, 70 + (Math.random()*30) - (player.level*2)); // slower when you level higher
+        const fireRate = 1.4 + Math.random()*1.6;
+        const xpValue = Math.max(6, Math.round((hp + r)/8));
+        enemies.push({ x,y,r,hp,spd,fireRate,fireTimer:Math.random()*fireRate, xpValue });
+        return;
+      }
+    }
+  }
+
+  function spawnOrb(x,y,xp){
+    orbs.push({ x,y,r:6+Math.min(12,xp/4), xp, life:18, age:0 });
+  }
+
+  // Level up logic & UI
+  function tryLevelUp(){
+    const need = Math.floor(12 + player.level*10);
+    if (player.xp >= need){
+      player.xp -= need;
+      player.level += 1;
+      // pause and show upgrade choices
+      showUpgradeChoices(player.level);
+    }
+  }
+
+  function applyUpgrade(upg){
+    if (!upg) return;
+    upg.apply(weaponState);
+    // track chosen
+    weaponState.upgrades[upg.id] = (weaponState.upgrades[upg.id] || 0) + 1;
+    // small instant benefit: bump hp a bit
+    player.hp = Math.min(player.hpMax, player.hp + Math.floor(player.hpMax*0.25));
+    // resume game
+    showingUpgrade = false;
+    paused = false;
+    overlay.style.pointerEvents = 'none';
+    overlay.style.display = 'none';
+    last = performance.now();
+    requestAnimationFrame(loop);
+  }
+
+  function showUpgradeChoices(level){
+    paused = true;
+    showingUpgrade = true;
+    overlay.style.display = 'flex';
+    overlay.style.pointerEvents = 'auto';
+    const menu = overlay.querySelector('#menu');
+    menu.innerHTML = `
+      <h1>Choose an Upgrade</h1>
+      <div class="big">Level ${level}</div>
+      <p class="muted">Pick one upgrade — your weapons will evolve and branch as you progress.</p>
+      <div class="choice-row"></div>
+    `;
+    const row = menu.querySelector('.choice-row');
+    const choices = getUpgradeChoices(level);
+    choices.forEach(u=>{
+      const div = document.createElement('div'); div.className='choice';
+      div.innerHTML = \`<h3>\${u.title}</h3><p>\${u.desc}</p>\`;
+      div.addEventListener('click', ()=> applyUpgrade(u));
+      row.appendChild(div);
+    });
+  }
+
+  // update loop
+  function update(dt){
+    if (!running || paused) return;
+    runtime += dt;
+
+    // camera center follow player
+    const vw = window.innerWidth, vh = window.innerHeight;
+    cam.x = clamp(player.x - vw/2, 0, WORLD_W - vw);
+    cam.y = clamp(player.y - vh/2, 0, WORLD_H - vh);
+
+    // player movement using joystickVec (normalized)
+    if (joystickVec.x !== 0 || joystickVec.y !== 0){
+      player.x += joystickVec.x * player.speed * dt;
+      player.y += joystickVec.y * player.speed * dt;
+    }
+    // clamp in world
+    player.x = clamp(player.x, player.r, WORLD_W - player.r);
+    player.y = clamp(player.y, player.r, WORLD_H - player.r);
+
+    // firing (right-side touch presence)
+    const aiming = Object.values(activeTouches).some(t => t.x >= window.innerWidth * 0.45);
+    if (aiming){
+      player.fireTimer -= dt;
+      if (player.fireTimer <= 0){
+        // weapon behavior depends on weaponState.type
+        const baseSpeed = 520 * (weaponState.projSpeedMult || 1);
+        const baseDamage = player.damage;
+        if (weaponState.type === 'basic'){
+          spawnBullet(player.x + Math.cos(player.angle)*(player.r+10), player.y + Math.sin(player.angle)*(player.r+10), player.angle, 'player', baseSpeed, baseDamage);
+        } else if (weaponState.type === 'spread'){
+          spawnBullet(player.x, player.y, player.angle, 'player', baseSpeed, baseDamage);
+        } else if (weaponState.type === 'twin'){
+          spawnBullet(player.x + Math.cos(player.angle+0.12)*(player.r+6), player.y + Math.sin(player.angle+0.12)*(player.r+6), player.angle, 'player', baseSpeed, baseDamage);
+          spawnBullet(player.x + Math.cos(player.angle-0.12)*(player.r+6), player.y + Math.sin(player.angle-0.12)*(player.r+6), player.angle, 'player', baseSpeed, baseDamage);
+        } else if (weaponState.type === 'rapid'){
+          // small damage, faster rate
+          spawnBullet(player.x, player.y, player.angle, 'player', baseSpeed*1.05, Math.max(1, Math.round(baseDamage*0.6)));
+        } else {
+          spawnBullet(player.x, player.y, player.angle, 'player', baseSpeed, baseDamage);
+        }
+        player.fireTimer = Math.max(0.04, player.fireRate * (weaponState.fireRateMult || 1));
+      }
+    }
+
+    // bullets update & collisions (world coords)
+    for (let i = bullets.length-1; i >= 0; --i){
+      const b = bullets[i];
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      b.life -= dt;
+      if (b.life <= 0 || b.x < -200 || b.x > WORLD_W+200 || b.y < -200 || b.y > WORLD_H+200){
+        bullets.splice(i,1);
+        continue;
+      }
+      if (b.owner === 'player'){
+        for (let j = enemies.length-1; j >= 0; --j){
+          const e = enemies[j];
+          const dx = b.x - e.x, dy = b.y - e.y;
+          if (dx*dx + dy*dy <= (e.r+4)*(e.r+4)){
+            e.hp -= b.damage;
+            if (!b.pierce || (!weaponState.piercing && !b.pierce)){ // non-piercing kills bullet
+              bullets.splice(i,1);
+            }
+            if (e.hp <= 0){
+              // drop orbs (split)
+              const chunks = Math.max(1, Math.round(e.xpValue/5));
+              for (let k=0;k<chunks;k++){
+                spawnOrb(e.x + (Math.random()*30-15), e.y + (Math.random()*30-15), Math.max(1, Math.round(e.xpValue/chunks)));
+              }
+              enemies.splice(j,1);
+            }
+            break;
+          }
+        }
+      } else { // enemy bullet into player
+        const dx = b.x - player.x, dy = b.y - player.y;
+        if (dx*dx + dy*dy <= (player.r+4)*(player.r+4)){
+          player.hp -= b.damage;
+          bullets.splice(i,1);
+          if (player.hp <= 0){ endGame(); return; }
+        }
+      }
+    }
+
+    // enemies movement & firing (simple)
+    for (let e of enemies){
+      const ang = Math.atan2(player.y - e.y, player.x - e.x);
+      e.x += Math.cos(ang) * e.spd * dt * 0.55;
+      e.y += Math.sin(ang) * e.spd * dt * 0.55;
+      e.fireTimer -= dt;
+      if (e.fireTimer <= 0){
+        e.fireTimer = e.fireRate;
+        const aim = Math.atan2(player.y - e.y, player.x - e.x) + (Math.random()*0.32 - 0.16);
+        const dmg = Math.max(6, Math.round(e.xpValue/4));
+        bullets.push({ x: e.x + Math.cos(aim)*(e.r+8), y: e.y + Math.sin(aim)*(e.r+8), vx: Math.cos(aim)*(300+Math.random()*80), vy: Math.sin(aim)*(300+Math.random()*80), life:3, owner:'enemy', damage:dmg });
+        if (bullets.length > 220) bullets.shift();
+      }
+    }
+
+    // orbs update & collect
+    for (let i = orbs.length-1; i >= 0; --i){
+      const o = orbs[i]; o.age += dt;
+      o.y += Math.sin(o.age*3) * 4 * dt;
+      // attract if close
+      const d = Math.hypot(player.x - o.x, player.y - o.y);
+      if (d < 120){
+        const a = Math.atan2(player.y - o.y, player.x - o.x);
+        o.x += Math.cos(a) * (80 + (120-d)) * dt;
+        o.y += Math.sin(a) * (80 + (120-d)) * dt;
+      }
+      // collect
+      if ((player.x - o.x)*(player.x - o.x) + (player.y - o.y)*(player.y - o.y) <= (player.r + o.r)*(player.r + o.r)){
+        player.totalXp += o.xp;
+        player.xp += o.xp;
+        xpEl.textContent = Math.floor(player.totalXp);
+        if (player.totalXp > high){ high = player.totalXp; localStorage.setItem('fartea_high', String(high)); highEl.textContent = Math.floor(high); }
+        orbs.splice(i,1);
+        tryLevelUp();
+      } else {
+        o.life -= dt;
+        if (o.life <= 0) orbs.splice(i,1);
+      }
+    }
+
+    // collisions player <-> enemies (ram)
+    for (let e of enemies){
+      const dx = e.x - player.x, dy = e.y - player.y;
+      if (dx*dx + dy*dy <= (e.r + player.r)*(e.r + player.r)){
+        player.hp -= Math.max(4, Math.floor(e.r*0.2));
+        e.x -= Math.cos(Math.atan2(dy,dx))*6;
+        e.y -= Math.sin(Math.atan2(dy,dx))*6;
+        if (player.hp <= 0){ endGame(); return; }
+      }
+    }
+
+    // spawn logic: attempt spawn across world with cap & min distance to player
+    spawnTimer -= dt;
+    if (spawnTimer <= 0){
+      spawnTimer = spawnRate;
+      // spawn a few distributed enemies across world to keep engagement without overwhelming local area
+      for (let i=0;i<2;i++){
+        spawnEnemyFar();
+      }
+      // gently ramp spawnRate downward (more spawns as runtime increases but slowly)
+      spawnRate = Math.max(0.55, spawnRate * 0.995);
+    }
+
+    // display hp/lvl etc
+    player.hp = clamp(player.hp, 0, player.hpMax);
+    hpEl.textContent = Math.floor(player.hp);
+    lvlEl.textContent = player.level;
+    xpEl.textContent = Math.floor(player.totalXp);
+  }
+
+  // draw (only visible region for performance)
+  function drawGrid(viewX, viewY, vw, vh){
+    const step = 64;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.035)';
+    ctx.lineWidth = 1;
+    // compute first visible lines
+    const startX = Math.floor(viewX / step) * step;
+    const startY = Math.floor(viewY / step) * step;
+    for (let x = startX; x < viewX + vw; x += step){
+      const sx = x - viewX;
+      ctx.beginPath(); ctx.moveTo(Math.round(sx)+0.5, 0); ctx.lineTo(Math.round(sx)+0.5, vh); ctx.stroke();
+    }
+    for (let y = startY; y < viewY + vh; y += step){
+      const sy = y - viewY;
+      ctx.beginPath(); ctx.moveTo(0, Math.round(sy)+0.5); ctx.lineTo(vw, Math.round(sy)+0.5); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function draw(){
+    const vw = window.innerWidth, vh = window.innerHeight;
+    // clear screen
+    ctx.fillStyle = '#071020';
+    ctx.fillRect(0,0,vw,vh);
+
+    // grid drawn in world coords relative to camera
+    drawGrid(cam.x, cam.y, vw, vh);
+
+    // draw orbs
+    for (const o of orbs){
+      const s = worldToScreen(o.x, o.y);
+      ctx.beginPath();
+      ctx.fillStyle = 'rgba(255,226,122,0.95)';
+      ctx.arc(s.x, s.y, o.r, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(40,20,0,0.6)';
+      ctx.font = '600 12px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText(String(o.xp), s.x, s.y + 4);
+    }
+
+    // draw enemies
+    for (const e of enemies){
+      const s = worldToScreen(e.x, e.y);
+      ctx.beginPath();
+      ctx.fillStyle = 'rgba(255,107,107,0.12)';
+      ctx.ellipse(s.x, s.y, e.r*2.6, e.r*2.6, 0, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.fillStyle = 'rgba(255,107,107,1)'; ctx.arc(s.x, s.y, e.r, 0, Math.PI*2); ctx.fill();
+      // hp bar
+      const barW = e.r*2;
+      ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(s.x - e.r, s.y - e.r - 8, barW, 5);
+      const maxHpEst = Math.max(20, (30 + runtime*0.6));
+      const pct = clamp(e.hp / maxHpEst, 0, 1);
+      ctx.fillStyle = 'rgba(120,40,40,0.95)'; ctx.fillRect(s.x - e.r, s.y - e.r - 8, barW * pct, 5);
+    }
+
+    // draw bullets
+    for (const b of bullets){
+      const s = worldToScreen(b.x, b.y);
+      ctx.beginPath();
+      ctx.fillStyle = b.owner === 'player' ? 'rgba(160,240,255,1)' : 'rgba(255,170,170,1)';
+      ctx.arc(s.x, s.y, 4, 0, Math.PI*2); ctx.fill();
+    }
+
+    // player (always draw at screen center relative to camera)
+    const sp = worldToScreen(player.x, player.y);
+    // glow
+    ctx.beginPath();
+    const grd = ctx.createRadialGradient(sp.x, sp.y, player.r*0.2, sp.x, sp.y, player.r*3.2);
+    grd.addColorStop(0, 'rgba(58,160,255,0.24)'); grd.addColorStop(1, 'rgba(58,160,255,0)');
+    ctx.fillStyle = grd; ctx.ellipse(sp.x, sp.y, player.r*3.6, player.r*3.6, 0, 0, Math.PI*2); ctx.fill();
+    // circle
+    ctx.beginPath(); ctx.fillStyle = 'rgba(58,160,255,1)'; ctx.arc(sp.x, sp.y, player.r, 0, Math.PI*2); ctx.fill();
+    // cannon rectangle pointing at player.angle
+    ctx.save(); ctx.translate(sp.x, sp.y); ctx.rotate(player.angle);
+    ctx.fillStyle = 'rgba(150,155,160,1)'; ctx.fillRect(player.r - 4, -8, player.r*1.8, 16);
+    ctx.restore();
+
+    // player HP bar bottom-left
+    const barW = 200;
+    ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(12, window.innerHeight - 34, barW, 16);
+    ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(14, window.innerHeight - 32, barW-4, 12);
+    const hpPct = clamp(player.hp / player.hpMax, 0, 1);
+    ctx.fillStyle = 'rgba(58,160,255,0.95)'; ctx.fillRect(14, window.innerHeight - 32, (barW-4)*hpPct, 12);
+  }
+
+  // main loop
+  function loop(now){
+    const dt = Math.min(0.05, (now - last)/1000);
+    last = now;
+    update(dt);
+    draw();
+    if (running && !paused) requestAnimationFrame(loop);
+  }
+
+  // helpers
+  function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+  function rand(min,max){ return Math.random()*(max-min) + min; }
+
+  // start / end / pause / restart
+  function start(){
+    running = true; paused = false; showingUpgrade = false;
+    overlay.style.display = 'none'; overlay.style.pointerEvents = 'none';
+    player.x = WORLD_W/2; player.y = WORLD_H/2; player.hpMax = 120; player.hp = player.hpMax;
+    player.level = 1; player.xp = 0; player.totalXp = 0;
+    runtime = 0;
+    bullets.length = enemies.length = orbs.length = 0;
+    // reset spawn tuning
+    spawnRate = 1.4; spawnTimer = spawnRate;
+    // weapon reset
+    weaponState.type = 'basic';
+    weaponState.upgrades = {};
+    weaponState.damageMult = 1; weaponState.fireRateMult = 1; weaponState.projSpeedMult = 1;
+    weaponState.spreadCount = 1; weaponState.piercing = false;
+    last = performance.now();
+    requestAnimationFrame(loop);
+  }
+  function endGame(){
+    running = false;
+    overlay.style.display = 'flex'; overlay.style.pointerEvents = 'auto';
+    const menu = overlay.querySelector('#menu');
+    menu.innerHTML = \`
+      <h1>You Died</h1>
+      <div class="big">You gathered \${Math.floor(player.totalXp)} XP</div>
+      <p class="muted">Tap Restart to try again.</p>
+      <div style="height:12px"></div>
+      <button id="restartNow">Restart</button>
+    \`;
+    const b = menu.querySelector('#restartNow');
+    b.addEventListener('click', ()=> { start(); });
+  }
+
+  pauseBtn.addEventListener('click', ()=>{
+    if (!running) return;
+    paused = !paused;
+    pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+    if (!paused){ last = performance.now(); requestAnimationFrame(loop); }
+  });
+
+  restartBtn.addEventListener('click', ()=>{
+    start();
+  });
+
+  startBtn.addEventListener('click', ()=> start());
+
+  // ensure joystick visuals layout
+  function layoutJoysticks(){
+    joyOutline.style.width = '120px'; joyOutline.style.height = '120px';
+    joyStick.style.width = '80px'; joyStick.style.height = '80px';
+  }
+  layoutJoysticks();
+
+  // keep spawn attempt occasionally if few enemies
+  setInterval(()=> {
+    if (!running || paused || showingUpgrade) return;
+    if (enemies.length < Math.min(8 + Math.floor(runtime/40), MAX_ENEMIES)){
+      spawnEnemyFar();
+    }
+  }, 900);
+
+})();
+</script>
+</body>
+</html>
